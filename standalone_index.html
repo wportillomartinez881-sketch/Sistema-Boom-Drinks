@@ -1,0 +1,827 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Boom Drinks - Sistema POS & Informe INSAB Oficial (Módulo 3.7)</title>
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- React 18 & ReactDOM CDN -->
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+  <!-- Babel Standalone para JSX -->
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <!-- Canvas Confetti CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js"></script>
+
+  <style>
+    @media print {
+      @page { size: letter portrait; margin: 12mm 14mm 14mm 14mm; }
+      body { background-color: #ffffff !important; color: #0f172a !important; font-size: 9.5pt !important; line-height: 1.35 !important; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+      header, footer, nav, button, .print-hidden { display: none !important; }
+      main { padding: 0 !important; margin: 0 !important; max-width: 100% !important; width: 100% !important; }
+      .print-avoid-break { page-break-inside: avoid !important; break-inside: avoid !important; }
+      table { page-break-inside: avoid !important; break-inside: avoid !important; border-collapse: collapse !important; width: 100% !important; font-size: 8.5pt !important; }
+      th, td { border-color: #cbd5e1 !important; padding: 4px 6px !important; }
+      th { background-color: #f1f5f9 !important; color: #0f172a !important; font-weight: bold !important; }
+    }
+    .no-scrollbar::-webkit-scrollbar { display: none; }
+    .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+  </style>
+</head>
+<body class="bg-slate-100/70 text-slate-900 font-sans antialiased selection:bg-cyan-500 selection:text-white">
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect } = React;
+
+    // Redondeo comercial hacia arriba al cuarto de dólar ($0.25)
+    const roundCommercial = (val) => Math.ceil(val * 4) / 4;
+
+    const PRODUCTS = [
+      { id: 'blue-sharks', name: 'Blue Sharks', description: 'Bebida refrescante azul océano con gomita de tiburón, jarabe cítrico, soda y hielo frappé.', price: 2.50, type: 'drink', badge: 'Bebida Estrella 🦈' },
+      { id: 'la-toxica', name: 'La Tóxica', description: 'Bebida frutal exótica con escarchado especial picosito de chamoy, tajín y gomitas ácidas.', price: 2.00, type: 'drink', badge: 'Especial Picosito 🧪' },
+      { id: 'duo-letal', name: 'Dúo Letal', description: 'Combo promocional: 1 Blue Shark + 1 La Tóxica. ¡Precio especial en pareja!', price: 4.00, type: 'combo', badge: 'Combo $4.00 ⚡' },
+      { id: 'doble-peligro', name: 'Doble Peligro', description: 'Mega Combo: 2 Blue Sharks + 2 La Tóxica para compartir con tu grupo.', price: 7.50, type: 'combo', badge: 'Mega Combo 🔥' }
+    ];
+
+    const COUPONS = [
+      { id: 'none', label: 'Sin Cupón (0%)', percent: 0 },
+      { id: 'percent_10', label: 'Cupón 10%', percent: 10 },
+      { id: 'percent_15', label: 'Cupón 15%', percent: 15 },
+      { id: 'percent_20', label: 'Cupón 20%', percent: 20 }
+    ];
+
+    // Nómina Oficial de los 7 Socios Cooperativistas ($20 aportados c/u = $140 total)
+    const INITIAL_PARTNERS = [
+      { id: '1', name: 'Raquel Henríquez', role: 'Gerente General', capitalContributed: 20.00 },
+      { id: '2', name: 'Emily Rolin', role: 'Jefa de Producción', capitalContributed: 20.00 },
+      { id: '3', name: 'Ashlie Aguilar', role: 'Auxiliar de Producción', capitalContributed: 20.00 },
+      { id: '4', name: 'Williams Portillo', role: 'Encargado de Logística', capitalContributed: 20.00 },
+      { id: '5', name: 'Gabriela Ferrufino', role: 'Responsable Financiera y Administrativa', capitalContributed: 20.00 },
+      { id: '6', name: 'Alexandra Vázquez', role: 'Encargada de Marketing y Community Manager', capitalContributed: 20.00 },
+      { id: '7', name: 'Jefferson Martinez', role: 'Auxiliar de Producción', capitalContributed: 20.00 }
+    ];
+
+    function App() {
+      const [activeTab, setActiveTab] = useState('pos');
+      const [cart, setCart] = useState([]);
+      const [activeCoupon, setActiveCoupon] = useState('none');
+      const [customerName, setCustomerName] = useState('');
+      const [cashInput, setCashInput] = useState('');
+      const [selectedOrder, setSelectedOrder] = useState(null);
+
+      // Persistencia Local
+      const [orders, setOrders] = useState(() => {
+        try { return JSON.parse(localStorage.getItem('bd_orders') || '[]'); } catch { return []; }
+      });
+      const [expenses, setExpenses] = useState(() => {
+        try { return JSON.parse(localStorage.getItem('bd_expenses') || '[]'); } catch { return []; }
+      });
+      const [losses, setLosses] = useState(() => {
+        try { return JSON.parse(localStorage.getItem('bd_losses') || '[]'); } catch { return []; }
+      });
+      const [partners, setPartners] = useState(() => {
+        try { return JSON.parse(localStorage.getItem('bd_partners') || JSON.stringify(INITIAL_PARTNERS)); } catch { return INITIAL_PARTNERS; }
+      });
+
+      const [production, setProduction] = useState({
+        plannedBlueSharks: 50, plannedLaToxica: 50, manualDamagedBlueSharks: 0, manualDamagedLaToxica: 0,
+        explanation: 'Planificados: 50 unidades de Blue Sharks y 50 de La Tóxica (100 totales). Elaboración continua conforme al flujo de demanda de la feria.'
+      });
+
+      const [metadata, setMetadata] = useState({
+        businessName: 'Boom Drinks',
+        productName: 'Blue Sharks y La Tóxica (Bebidas Temáticas Refrescantes)',
+        schoolName: 'INSTITUTO NACIONAL DE SAN BARTOLO – INSAB',
+        moduleName: 'MÓDULO 3.7: PUESTA EN MARCHA DE LA MICROEMPRESA COOPERATIVA',
+        eventName: 'FERIA DE EMPRENDIMIENTO',
+        teacherName: 'Profesora Ángela Marisol Osegueda',
+        fairDate: '24 de Octubre de 2026',
+        productionPhone: '',
+        customLogoUrl: 'logo.jpg',
+        slogan: '¡Sabor explosivo que despierta tus sentidos!',
+        mission: 'Ofrecer a la comunidad estudiantil y docente del INSAB bebidas artesanales refrescantes, higiénicas y de alta calidad visual y gustativa, bajo los principios cooperativos de ayuda mutua y solidaridad.',
+        vision: 'Consolidar a Boom Drinks como la microempresa escolar referente en innovación de bebidas y servicio al cliente dentro del INSAB, destacando por su rentabilidad y transparencia contable.',
+        mainLossCause: 'Ninguna merma crítica reportada al momento.',
+        howToAvoidLosses: 'Control estricto de temperaturas de hielo y montaje ordenado de vasos con dosificadores.',
+        distributionExplanation: 'Se distribuye el 100% de la utilidad neta en 7 partes estrictamente iguales entre los socios cooperativistas ($20 aportados c/u).',
+        teamConclusion: 'La microempresa escolar Boom Drinks superó las metas comerciales y pedagógicas en la feria escolar INSAB. Gracias al atractivo de Blue Sharks, La Tóxica y las promociones del Dúo Letal, recuperamos el 100% de la inversión inicial de $140.00 aportada por los 7 socios cooperativistas y repartimos dividendos líquidos equitativos.'
+      });
+
+      // Estados de Evaluación Cualitativa
+      const [serviceRating, setServiceRating] = useState({
+        saludoCordial: 'SI', explicoProducto: 'SI', informoPrecio: 'SI', atendioDudas: 'SI',
+        ofrecioAlternativas: 'SI', realizoCobro: 'SI', entregoProducto: 'SI', agradecioCompra: 'SI',
+        customerComments: 'Los clientes felicitaron la presentación visual del tiburón flotante y el toque picosito del escarchado de chamoy y tajín.'
+      });
+
+      const [problems, setProblems] = useState({
+        production: { p: 'Gran afluencia de pedidos en el receso que requería escarchar vasos a alta velocidad.', s: 'Se dividió el ensamble: un socio escarchaba y otro servía las bebidas con dosificador.' },
+        inventory: { p: 'El hielo picado se derretía rápidamente al mediodía.', s: 'Se conservó en hielera térmica hermética y se repuso bloque de hielo a tiempo.' },
+        sales: { p: 'Varios clientes pagaban con billetes de $10 y $20 al abrir.', s: 'Se habilitó un fondo de cambio en monedas de $0.25 y billetes de $1.00.' },
+        service: { p: 'Consultas múltiples y simultáneas sobre sabores e ingredientes.', s: 'Se colocaron carteles informativos visibles con el menú temático en el estand.' },
+        teamwork: { p: 'Sincronización entre la mesa de cobro y la barra de entrega.', s: 'Se enviaron las órdenes al WhatsApp de cocina y se usaron fichas numeradas.' },
+        others: { p: 'Espacio estrecho en la mesa principal.', s: 'Se optimizó el área de forma vertical y se despejó la barra de despacho.' }
+      });
+
+      const [checklist, setChecklist] = useState({
+        'Datos generales de la portada': true,
+        'Resultados de producción (100 unidades)': true,
+        'Registro de ventas e ingresos': true,
+        'Control de mermas y desperdicios': true,
+        'Capital de inversión ($140.00)': true,
+        'Recuperación de capital al 100%': true,
+        'Distribución entre los 7 socios': true,
+        'Evaluación de atención al cliente': true,
+        'Bitácora de incidencias resueltas': true,
+        'Evaluación de áreas de trabajo': true,
+        'Aprendizajes pedagógicos clave': true,
+        'Conclusión oficial del equipo': true,
+        'Firmas de los 7 socios cooperativistas': true,
+        'Visto bueno de la docente INSAB': true
+      });
+
+      // Efectos de Guardado
+      useEffect(() => {
+        localStorage.setItem('bd_orders', JSON.stringify(orders));
+        localStorage.setItem('bd_expenses', JSON.stringify(expenses));
+        localStorage.setItem('bd_losses', JSON.stringify(losses));
+        localStorage.setItem('bd_partners', JSON.stringify(partners));
+      }, [orders, expenses, losses, partners]);
+
+      // Cálculos Financieros
+      let totalSales = 0, blueSharksSold = 0, laToxicaSold = 0, duoLetalSold = 0, doblePeligroSold = 0, totalUnits = 0;
+      orders.forEach(o => {
+        totalSales += o.total;
+        o.items.forEach(i => {
+          totalUnits += i.quantity;
+          if (i.id === 'blue-sharks') blueSharksSold += i.quantity;
+          else if (i.id === 'la-toxica') laToxicaSold += i.quantity;
+          else if (i.id === 'duo-letal') duoLetalSold += i.quantity;
+          else if (i.id === 'doble-peligro') doblePeligroSold += i.quantity;
+        });
+      });
+
+      const equivBlue = blueSharksSold + duoLetalSold * 1 + doblePeligroSold * 2;
+      const equivToxica = laToxicaSold + duoLetalSold * 1 + doblePeligroSold * 2;
+      const totalCosts = expenses.reduce((s, e) => s + e.amount, 0);
+      const totalLossesVal = losses.reduce((s, l) => s + l.estimatedValue, 0);
+      const initialCapital = 140.00;
+      const netProfit = totalSales - totalCosts;
+      const capitalRecovered = Math.min(initialCapital, totalSales);
+      const capitalPending = Math.max(0, initialCapital - totalSales);
+      const isRecovered = totalSales >= initialCapital;
+      const profitPerPartner = netProfit > 0 ? netProfit / 7 : 0;
+      const payoutPerPartner = (capitalRecovered / 7) + profitPerPartner;
+      const avgTicket = orders.length > 0 ? totalSales / orders.length : 0;
+
+      // Carrito
+      const addToCart = (p) => {
+        setCart(prev => {
+          const ex = prev.find(i => i.product.id === p.id);
+          if (ex) return prev.map(i => i.product.id === p.id ? { ...i, quantity: i.quantity + 1 } : i);
+          return [...prev, { product: p, quantity: 1 }];
+        });
+      };
+
+      const updateQty = (id, delta) => {
+        setCart(prev => prev.map(i => {
+          if (i.product.id === id) {
+            const n = i.quantity + delta;
+            return n > 0 ? { ...i, quantity: n } : null;
+          }
+          return i;
+        }).filter(Boolean));
+      };
+
+      const couponObj = COUPONS.find(c => c.id === activeCoupon) || COUPONS[0];
+      let cartSubtotal = 0, cartDiscount = 0;
+      cart.forEach(item => {
+        const itemSub = item.product.price * item.quantity;
+        cartSubtotal += itemSub;
+        if (item.product.type !== 'combo' && couponObj.percent > 0) {
+          cartDiscount += (itemSub * couponObj.percent) / 100;
+        }
+      });
+      const unrounded = Math.max(0, cartSubtotal - cartDiscount);
+      const finalTotal = roundCommercial(unrounded);
+      const cashVal = parseFloat(cashInput) || 0;
+      const changeVal = cashVal >= finalTotal ? cashVal - finalTotal : 0;
+
+      const handleCheckout = (e) => {
+        e.preventDefault();
+        if (cart.length === 0) return;
+        const effCash = cashVal > 0 ? cashVal : finalTotal;
+        const newOrder = {
+          id: 'ord-' + Date.now(),
+          orderNumber: orders.length + 1,
+          timestamp: new Date().toLocaleTimeString('es-SV', { hour: '2-digit', minute: '2-digit' }) + ' (' + new Date().toLocaleDateString('es-SV') + ')',
+          customerName: customerName.trim() || ('Cliente #' + (orders.length + 1)),
+          items: cart.map(i => ({ id: i.product.id, name: i.product.name, price: i.product.price, quantity: i.quantity })),
+          rawSubtotal: cartSubtotal,
+          discount: cartDiscount,
+          total: finalTotal,
+          cashReceived: effCash,
+          cashChange: effCash - finalTotal
+        };
+
+        setOrders([newOrder, ...orders]);
+        setCart([]);
+        setCashInput('');
+        setCustomerName('');
+        setSelectedOrder(newOrder);
+
+        // Envío de comanda a WhatsApp de Producción
+        if (metadata.productionPhone) {
+          const raw = metadata.productionPhone.replace(/[^0-9]/g, '');
+          const phone = raw.length === 8 ? '503' + raw : raw;
+          const msg = `🚨 *NUEVA ORDEN DE PRODUCCIÓN - BOOM DRINKS*\n*Ticket:* #${newOrder.orderNumber}\n*Cliente:* ${newOrder.customerName}\n*Hora:* ${newOrder.timestamp}\n----------------------------------\n*A PREPARAR:*\n${newOrder.items.map(i => `➡️ *${i.quantity}x ${i.name}*`).join('\n')}\n----------------------------------\n¡Despachar de inmediato! 🦈🧪`;
+          window.open(`https://wa.me/${phone}?text=${encodeURIComponent(msg)}`, '_blank');
+        }
+
+        try { confetti({ particleCount: 45, spread: 60 }); } catch (err) {}
+      };
+
+      // Exportar Word (.doc)
+      const handleDownloadWordDoc = () => {
+        const content = `
+          <html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'>
+          <head><meta charset='utf-8'><title>Informe INSAB - Boom Drinks</title>
+          <style>
+            body { font-family: 'Calibri', Arial, sans-serif; font-size: 11pt; color: #0f172a; line-height: 1.4; margin: 20mm; }
+            h1 { font-size: 15pt; text-align: center; text-transform: uppercase; color: #0f172a; margin-bottom: 2px; }
+            h2 { font-size: 12pt; text-align: center; text-transform: uppercase; color: #334155; margin-top: 0; }
+            h3 { font-size: 11pt; text-align: center; text-transform: uppercase; color: #0284c7; }
+            table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 10pt; }
+            th, td { border: 1px solid #cbd5e1; padding: 6px 10px; }
+            th { background-color: #f1f5f9; font-weight: bold; }
+            .box { background-color: #f8fafc; border: 1px solid #cbd5e1; padding: 12px; margin-bottom: 12px; border-radius: 6px; }
+          </style></head>
+          <body>
+            <h1>${metadata.schoolName}</h1>
+            <h2>${metadata.moduleName}</h2>
+            <h3>${metadata.eventName}</h3>
+            <p style="text-align: center; font-weight: bold;">INFORME FINAL DE EVALUACIÓN Y CIERRE DEL PROYECTO</p>
+            <div class="box">
+              <p><strong>Negocio:</strong> ${metadata.businessName} | <strong>Slogan:</strong> "${metadata.slogan}"</p>
+              <p><strong>Docente:</strong> ${metadata.teacherName} | <strong>Fecha:</strong> ${metadata.fairDate}</p>
+              <p><strong>Capital Inicial:</strong> $140.00 (7 socios x $20.00)</p>
+            </div>
+            <h3>III. RESULTADOS DE PRODUCCIÓN</h3>
+            <table>
+              <tr><th>Concepto</th><th>Blue Sharks</th><th>La Tóxica</th><th>Total</th></tr>
+              <tr><td>Planificados</td><td>50</td><td>50</td><td>100</td></tr>
+              <tr><td>Elaborados en ventas</td><td>${equivBlue}</td><td>${equivToxica}</td><td>${equivBlue + equivToxica}</td></tr>
+              <tr><td>Vendidos equivalentes</td><td>${equivBlue}</td><td>${equivToxica}</td><td>${equivBlue + equivToxica}</td></tr>
+              <tr><td>Dañados / Mermas</td><td>0</td><td>0</td><td>0</td></tr>
+            </table>
+            <h3>IV. RESULTADOS DE VENTAS</h3>
+            <table>
+              <tr><th>Producto</th><th>Precio</th><th>Vendidos</th><th>Total</th></tr>
+              <tr><td>Blue Sharks</td><td>$2.50</td><td>${blueSharksSold}</td><td>$${(blueSharksSold * 2.50).toFixed(2)}</td></tr>
+              <tr><td>La Tóxica</td><td>$2.00</td><td>${laToxicaSold}</td><td>$${(laToxicaSold * 2.00).toFixed(2)}</td></tr>
+              <tr><td>Dúo Letal (Combo)</td><td>$4.00</td><td>${duoLetalSold}</td><td>$${(duoLetalSold * 4.00).toFixed(2)}</td></tr>
+              <tr><td>Doble Peligro (Mega Combo)</td><td>$7.50</td><td>${doblePeligroSold}</td><td>$${(doblePeligroSold * 7.50).toFixed(2)}</td></tr>
+              <tr style="font-weight: bold; background: #f1f5f9;"><td colspan="2">TOTAL:</td><td>${totalUnits}</td><td>$${totalSales.toFixed(2)}</td></tr>
+            </table>
+            <h3>VI. RESULTADO ECONÓMICO</h3>
+            <div class="box">
+              <p>GANANCIA = INGRESOS ($${totalSales.toFixed(2)}) - COSTOS ($${totalCosts.toFixed(2)}) = <strong>$${netProfit.toFixed(2)}</strong></p>
+              <p>Estado del Capital: <strong>${isRecovered ? "Recuperado al 100%" : "En proceso"}</strong></p>
+            </div>
+            <h3>VIII. DISTRIBUCIÓN ENTRE LOS 7 SOCIOS ($20 aportados c/u)</h3>
+            <table>
+              <tr><th>N.º</th><th>Socio</th><th>Rol</th><th>Aporte</th><th>Ganancia</th><th>Total Líquido</th></tr>
+              ${partners.map((p, idx) => `<tr><td>${idx + 1}</td><td>${p.name}</td><td>${p.role}</td><td>$20.00</td><td>$${profitPerPartner.toFixed(2)}</td><td>$${payoutPerPartner.toFixed(2)}</td></tr>`).join('')}
+            </table>
+          </body></html>
+        `;
+        const blob = new Blob(['\ufeff', content], { type: 'application/msword' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a'); a.href = url; a.download = 'Informe_INSAB_BoomDrinks.doc'; a.click();
+        URL.revokeObjectURL(url);
+      };
+
+      return (
+        <div className="min-h-screen flex flex-col">
+          {/* HEADER PRINCIPAL */}
+          <header className="bg-white border-b border-slate-200 sticky top-0 z-40 print-hidden shadow-xs">
+            <div className="max-w-7xl mx-auto px-4 py-3 flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div className="h-10 w-10 rounded-2xl bg-cyan-600 flex items-center justify-center text-white text-xl font-black shadow-md">💥</div>
+                <div>
+                  <h1 className="font-black text-lg text-slate-900 leading-tight uppercase">BOOM DRINKS</h1>
+                  <p className="text-[11px] text-slate-500 font-medium">Módulo 3.7 • 7 Socios Cooperativistas • INSAB</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 text-xs">
+                <span className="bg-slate-100 px-3 py-1.5 rounded-xl border">Ventas: <strong className="text-cyan-700 font-mono">${totalSales.toFixed(2)}</strong></span>
+                <span className="bg-slate-100 px-3 py-1.5 rounded-xl border">Ganancia: <strong className={netProfit >= 0 ? "text-emerald-700 font-mono" : "text-rose-700 font-mono"}>${netProfit.toFixed(2)}</strong></span>
+                <button onClick={() => { if(confirm('¿Reiniciar a cero todas las ventas para la feria en vivo?')) { setOrders([]); setCart([]); } }} className="text-[11px] px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 border rounded-xl font-semibold text-slate-600">Reiniciar a 0</button>
+              </div>
+            </div>
+
+            {/* BARRA DE NAVEGACIÓN - TODAS LAS 7 PESTAÑAS */}
+            <div className="max-w-7xl mx-auto px-4 border-t border-slate-100 overflow-x-auto no-scrollbar">
+              <nav className="flex space-x-1 py-1.5 min-w-max text-xs font-bold">
+                {[
+                  { id: 'pos', label: '🛒 Caja POS' },
+                  { id: 'sales', label: `📑 Ventas (${orders.length})` },
+                  { id: 'production', label: '🏭 Producción & Mermas' },
+                  { id: 'finances', label: '💼 Finanzas & 7 Socios' },
+                  { id: 'assessment', label: '📋 Evaluación Cualitativa' },
+                  { id: 'evidence', label: '📸 Checklist INSAB' },
+                  { id: 'report', label: '📜 Informe INSAB Oficial', hl: true }
+                ].map(t => (
+                  <button key={t.id} onClick={() => setActiveTab(t.id)} className={`px-3.5 py-2 rounded-xl transition ${activeTab === t.id ? (t.hl ? 'bg-cyan-600 text-white shadow-xs' : 'bg-slate-900 text-white') : 'text-slate-600 hover:bg-slate-100'}`}>
+                    {t.label}
+                  </button>
+                ))}
+              </nav>
+            </div>
+          </header>
+
+          {/* CONTENIDO PRINCIPAL */}
+          <main className="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 print:p-0">
+            {/* 1. CAJA POS */}
+            {activeTab === 'pos' && (
+              <div className="space-y-6">
+                {isRecovered && (
+                  <div className="bg-emerald-600 text-white p-4 rounded-2xl shadow-lg flex items-center justify-between border-2 border-emerald-300">
+                    <div>
+                      <h3 className="font-black text-sm uppercase">¡ALERTA: CAPITAL RECUPERADO AL 100%! ($140.00) 🎉</h3>
+                      <p className="text-xs text-emerald-100">Los 7 socios han recuperado su inversión de $20.00 cada uno. A partir de ahora todo es ganancia líquida.</p>
+                    </div>
+                    <span className="text-xl font-black font-mono">${totalSales.toFixed(2)}</span>
+                  </div>
+                )}
+
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                  {/* Catálogo */}
+                  <div className="lg:col-span-2 space-y-4">
+                    <h2 className="text-sm font-extrabold uppercase text-slate-800">Catálogo de Bebidas Oficial</h2>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      {PRODUCTS.map(p => (
+                        <div key={p.id} onClick={() => addToCart(p)} className="bg-white p-4 rounded-2xl border border-slate-200 hover:border-cyan-500 cursor-pointer transition flex flex-col justify-between shadow-xs">
+                          <div>
+                            <div className="flex justify-between items-start mb-1">
+                              <h3 className="font-bold text-sm text-slate-900">{p.name}</h3>
+                              <span className="text-xs px-2 py-0.5 rounded-full font-bold bg-slate-100 text-slate-800">{p.badge}</span>
+                            </div>
+                            <p className="text-xs text-slate-500">{p.description}</p>
+                          </div>
+                          <div className="flex justify-between items-center mt-3 pt-2 border-t border-slate-100">
+                            <span className="font-black text-base font-mono text-cyan-800">${p.price.toFixed(2)}</span>
+                            <span className="text-xs bg-cyan-50 text-cyan-700 px-2.5 py-1 rounded-lg font-bold">+ Agregar</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* WhatsApp de Producción */}
+                    <div className="bg-white p-4 rounded-2xl border border-slate-200 flex items-center justify-between gap-3 text-xs">
+                      <div>
+                        <strong>WhatsApp del Equipo de Producción / Cocina:</strong>
+                        <p className="text-[11px] text-slate-500">Se abrirá la orden automáticamente en WhatsApp al registrar el cobro.</p>
+                      </div>
+                      <input type="text" placeholder="Ej: 70000000" value={metadata.productionPhone} onChange={e => setMetadata({...metadata, productionPhone: e.target.value})} className="p-2 border rounded-xl font-mono text-xs w-36 bg-slate-50 text-center font-bold" />
+                    </div>
+                  </div>
+
+                  {/* Panel de Cobro */}
+                  <div className="bg-white p-5 rounded-3xl border border-slate-200 shadow-sm space-y-4 flex flex-col h-fit">
+                    <div className="flex justify-between items-center border-b pb-2">
+                      <h3 className="font-extrabold text-sm uppercase">Orden ({cart.reduce((s,i)=>s+i.quantity,0)})</h3>
+                      {cart.length > 0 && <button onClick={() => setCart([])} className="text-rose-600 text-xs font-bold">Vaciar</button>}
+                    </div>
+
+                    {cart.length === 0 ? (
+                      <p className="text-xs text-slate-400 py-6 text-center">Toca una bebida o combo para agregar.</p>
+                    ) : (
+                      <div className="space-y-2 max-h-56 overflow-y-auto">
+                        {cart.map(i => (
+                          <div key={i.product.id} className="flex justify-between items-center text-xs p-2 bg-slate-50 rounded-xl">
+                            <div>
+                              <span className="font-bold block">{i.product.name}</span>
+                              <span className="text-[10px] text-slate-500 font-mono">${i.product.price.toFixed(2)} c/u</span>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <button onClick={() => updateQty(i.product.id, -1)} className="w-6 h-6 bg-slate-200 rounded font-bold">-</button>
+                              <span className="font-mono font-bold w-4 text-center">{i.quantity}</span>
+                              <button onClick={() => updateQty(i.product.id, 1)} className="w-6 h-6 bg-slate-200 rounded font-bold">+</button>
+                              <span className="font-mono font-bold w-12 text-right">${(i.product.price * i.quantity).toFixed(2)}</span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {/* Cupones */}
+                    <div>
+                      <label className="text-[11px] font-bold text-slate-600 block mb-1">Cupón de Descuento (Bebidas Individuales):</label>
+                      <div className="grid grid-cols-2 gap-1 text-[11px]">
+                        {COUPONS.map(c => (
+                          <button key={c.id} onClick={() => setActiveCoupon(c.id)} className={`p-1.5 rounded-lg font-bold border transition ${activeCoupon === c.id ? 'bg-cyan-600 text-white border-cyan-600' : 'bg-slate-50 text-slate-700 border-slate-200'}`}>
+                            {c.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Totales */}
+                    <div className="border-t pt-2 space-y-1 text-xs">
+                      <div className="flex justify-between text-slate-600"><span>Subtotal:</span><span className="font-mono">${cartSubtotal.toFixed(2)}</span></div>
+                      {cartDiscount > 0 && <div className="flex justify-between text-emerald-600 font-semibold"><span>Descuento ({couponObj.label}):</span><span className="font-mono">-${cartDiscount.toFixed(2)}</span></div>}
+                      <div className="flex justify-between font-black text-base border-t pt-1 text-slate-900">
+                        <span>TOTAL:</span>
+                        <span className="font-mono text-cyan-800">${finalTotal.toFixed(2)}</span>
+                      </div>
+                    </div>
+
+                    {/* Formulario de Pago en Efectivo */}
+                    <form onSubmit={handleCheckout} className="space-y-2 pt-2 border-t">
+                      <input type="text" placeholder="Nombre cliente / Aula (opcional)" value={customerName} onChange={e => setCustomerName(e.target.value)} className="w-full p-2 bg-slate-50 border rounded-xl text-xs" />
+                      <div>
+                        <div className="flex justify-between text-[11px] mb-1 font-semibold text-slate-600">
+                          <span>Efectivo Recibido ($):</span>
+                          <span>Billetes Comunes:</span>
+                        </div>
+                        <div className="flex gap-1 mb-1">
+                          {[finalTotal, 5, 10, 20].map((b, idx) => (
+                            <button key={idx} type="button" onClick={() => setCashInput(String(b))} className="flex-1 py-1 bg-slate-100 hover:bg-slate-200 rounded text-[11px] font-bold font-mono">
+                              ${b.toFixed(2)}
+                            </button>
+                          ))}
+                        </div>
+                        <input type="number" step="0.25" placeholder={`$${finalTotal.toFixed(2)}`} value={cashInput} onChange={e => setCashInput(e.target.value)} className="w-full p-2 border rounded-xl text-sm font-mono font-bold text-center" />
+                      </div>
+                      {cashVal >= finalTotal && cashVal > 0 && (
+                        <div className="p-2 bg-emerald-50 border border-emerald-200 rounded-xl text-center text-xs text-emerald-800 font-bold">
+                          Cambio a Devolver: <span className="font-mono text-base font-black">${changeVal.toFixed(2)}</span>
+                        </div>
+                      )}
+                      <button type="submit" disabled={cart.length === 0} className="w-full py-3 bg-cyan-600 hover:bg-cyan-700 disabled:opacity-50 text-white rounded-xl font-bold text-sm shadow-md transition">
+                        Cobrar en Efectivo 💵
+                      </button>
+                    </form>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* 2. REGISTRO DE VENTAS */}
+            {activeTab === 'sales' && (
+              <div className="bg-white p-6 rounded-3xl border border-slate-200 space-y-4">
+                <div className="flex justify-between items-center border-b pb-3">
+                  <div>
+                    <h2 className="text-base font-bold">Historial de Ventas ({orders.length} Órdenes)</h2>
+                    <p className="text-xs text-slate-500">Ticket promedio: ${avgTicket.toFixed(2)}</p>
+                  </div>
+                  <span className="text-base font-black font-mono text-cyan-800">Total: ${totalSales.toFixed(2)}</span>
+                </div>
+                {orders.length === 0 ? (
+                  <p className="py-8 text-center text-slate-400 text-xs">Aún no hay ventas registradas.</p>
+                ) : (
+                  <div className="overflow-x-auto text-xs">
+                    <table className="w-full text-left">
+                      <thead className="bg-slate-50 font-bold border-b">
+                        <tr><th className="p-2.5">Ticket #</th><th className="p-2.5">Hora</th><th className="p-2.5">Cliente</th><th className="p-2.5">Items</th><th className="p-2.5 text-right">Total</th><th className="p-2.5 text-center">Acción</th></tr>
+                      </thead>
+                      <tbody className="divide-y">
+                        {orders.map(o => (
+                          <tr key={o.id}>
+                            <td className="p-2.5 font-mono font-bold">ORD-{String(o.orderNumber).padStart(4, '0')}</td>
+                            <td className="p-2.5 text-slate-500">{o.timestamp}</td>
+                            <td className="p-2.5 font-bold">{o.customerName}</td>
+                            <td className="p-2.5">{o.items.map(i => `${i.quantity}x ${i.name}`).join(', ')}</td>
+                            <td className="p-2.5 text-right font-mono font-black text-cyan-800">${o.total.toFixed(2)}</td>
+                            <td className="p-2.5 text-center">
+                              <button onClick={() => setSelectedOrder(o)} className="px-2 py-1 bg-slate-100 hover:bg-slate-200 rounded font-bold">Ver Ticket</button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* 3. PRODUCCIÓN & MERMAS */}
+            {activeTab === 'production' && (
+              <div className="space-y-6">
+                <div className="bg-white p-6 rounded-3xl border border-slate-200 space-y-4 text-xs">
+                  <h2 className="text-base font-bold">Resultados de Producción (Meta: 100 Bebidas)</h2>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="p-3 bg-blue-50 border border-blue-200 rounded-xl">
+                      <strong>🦈 Blue Sharks ($2.50)</strong>
+                      <div className="mt-1">Planificadas: 50 | Elaboradas: <strong className="font-mono">{equivBlue}</strong></div>
+                    </div>
+                    <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl">
+                      <strong>🧪 La Tóxica ($2.00)</strong>
+                      <div className="mt-1">Planificadas: 50 | Elaboradas: <strong className="font-mono">{equivToxica}</strong></div>
+                    </div>
+                  </div>
+                  <table className="w-full border">
+                    <thead className="bg-slate-100 font-bold">
+                      <tr><th className="p-2 border">Concepto</th><th className="p-2 border text-center">Blue Sharks</th><th className="p-2 border text-center">La Tóxica</th><th className="p-2 border text-center font-bold">Total</th></tr>
+                    </thead>
+                    <tbody>
+                      <tr><td className="p-2 border">Planificados</td><td className="p-2 border text-center font-mono">50</td><td className="p-2 border text-center font-mono">50</td><td className="p-2 border text-center font-mono font-bold">100</td></tr>
+                      <tr className="bg-emerald-50"><td className="p-2 border font-bold">Elaborados (en ventas)</td><td className="p-2 border text-center font-mono font-bold">{equivBlue}</td><td className="p-2 border text-center font-mono font-bold">{equivToxica}</td><td className="p-2 border text-center font-mono font-bold">{equivBlue + equivToxica}</td></tr>
+                      <tr><td className="p-2 border font-bold">Vendidos (Total equivalente)</td><td className="p-2 border text-center font-mono">{equivBlue}</td><td className="p-2 border text-center font-mono">{equivToxica}</td><td className="p-2 border text-center font-mono font-bold">{equivBlue + equivToxica}</td></tr>
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* Mermas */}
+                <div className="bg-white p-6 rounded-3xl border border-slate-200 space-y-4 text-xs">
+                  <div className="flex justify-between items-center border-b pb-2">
+                    <h3 className="font-bold text-sm">Control de Mermas y Desperdicios</h3>
+                    <span className="font-mono font-bold text-rose-700">Total Mermas: ${totalLossesVal.toFixed(2)}</span>
+                  </div>
+                  {losses.length === 0 ? <p className="text-slate-400 py-4 text-center">Sin mermas registradas.</p> : (
+                    <table className="w-full border">
+                      <thead className="bg-slate-100 font-bold">
+                        <tr><th className="p-2 border">Tipo</th><th className="p-2 border">Descripción</th><th className="p-2 border text-center">Cant.</th><th className="p-2 border">Causa</th><th className="p-2 border text-right">Valor</th></tr>
+                      </thead>
+                      <tbody>
+                        {losses.map(l => (
+                          <tr key={l.id}><td className="p-2 border">{l.lossType}</td><td className="p-2 border">{l.description}</td><td className="p-2 border text-center font-mono">{l.quantity}</td><td className="p-2 border">{l.cause}</td><td className="p-2 border text-right font-mono font-bold text-rose-700">${l.estimatedValue.toFixed(2)}</td></tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* 4. FINANZAS & 7 SOCIOS */}
+            {activeTab === 'finances' && (
+              <div className="space-y-6">
+                <div className="bg-slate-900 text-white p-6 rounded-3xl space-y-4 text-xs">
+                  <div className="flex justify-between items-center border-b border-slate-700 pb-2">
+                    <h2 className="text-base font-bold">Balance General del Negocio (7 Socios)</h2>
+                    <span className="bg-emerald-500/20 text-emerald-400 px-3 py-1 rounded-xl font-bold">Capital: {isRecovered ? "Recuperado al 100%" : "En proceso"}</span>
+                  </div>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-center">
+                    <div className="bg-white/5 p-3 rounded-xl"><span className="text-slate-400 block text-[10px]">CAPITAL INVERTIDO</span><strong className="text-base font-mono">$140.00</strong></div>
+                    <div className="bg-white/5 p-3 rounded-xl"><span className="text-slate-400 block text-[10px]">TOTAL VENDIDO</span><strong className="text-base font-mono text-cyan-400">${totalSales.toFixed(2)}</strong></div>
+                    <div className="bg-white/5 p-3 rounded-xl"><span className="text-slate-400 block text-[10px]">COSTOS TOTALES</span><strong className="text-base font-mono text-amber-300">${totalCosts.toFixed(2)}</strong></div>
+                    <div className="bg-white/5 p-3 rounded-xl"><span className="text-slate-400 block text-[10px]">GANANCIA NETA</span><strong className="text-base font-mono text-emerald-400">${netProfit.toFixed(2)}</strong></div>
+                  </div>
+                  <div className="pt-2 border-t border-slate-700 flex justify-between items-center">
+                    <span>Ganancia individual (1/7): <strong className="font-mono text-cyan-400">${profitPerPartner.toFixed(2)}</strong></span>
+                    <span className="bg-emerald-500/20 px-3 py-1 rounded-xl text-emerald-300 font-bold">Total a recibir por socio: ${payoutPerPartner.toFixed(2)}</span>
+                  </div>
+                </div>
+
+                <div className="bg-white p-6 rounded-3xl border border-slate-200 space-y-4 text-xs">
+                  <h3 className="font-bold text-sm">Distribución Oficial entre los 7 Socios ($20 aportados c/u)</h3>
+                  <table className="w-full border">
+                    <thead className="bg-slate-100 font-bold">
+                      <tr><th className="p-2 border text-center">N.º</th><th className="p-2 border">Socio</th><th className="p-2 border">Cargo</th><th className="p-2 border text-right">Aporte</th><th className="p-2 border text-right">Devolución</th><th className="p-2 border text-right">Ganancia</th><th className="p-2 border text-right font-bold bg-cyan-50">Total Líquido</th></tr>
+                    </thead>
+                    <tbody>
+                      {partners.map((p, idx) => (
+                        <tr key={p.id}>
+                          <td className="p-2 border text-center font-mono">{idx + 1}</td>
+                          <td className="p-2 border font-bold">{p.name}</td>
+                          <td className="p-2 border text-slate-600">{p.role}</td>
+                          <td className="p-2 border text-right font-mono">$20.00</td>
+                          <td className="p-2 border text-right font-mono">$20.00</td>
+                          <td className="p-2 border text-right font-mono text-emerald-700 font-bold">${profitPerPartner.toFixed(2)}</td>
+                          <td className="p-2 border text-right font-mono font-black text-cyan-900 bg-cyan-50/50">${payoutPerPartner.toFixed(2)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            {/* 5. EVALUACIÓN CUALITATIVA */}
+            {activeTab === 'assessment' && (
+              <div className="bg-white p-6 rounded-3xl border border-slate-200 space-y-6 text-xs">
+                <h2 className="text-base font-bold">Valoración Cualitativa de Atención al Cliente & Problemas</h2>
+                <table className="w-full border">
+                  <thead className="bg-slate-100 font-bold">
+                    <tr><th className="p-2 border">Criterio de Servicio</th><th className="p-2 border text-center">SÍ</th><th className="p-2 border text-center">NO</th><th className="p-2 border text-center">DEBE MEJORARSE</th></tr>
+                  </thead>
+                  <tbody>
+                    {[
+                      { k: 'saludoCordial', l: '1. Se saludó cordialmente al cliente' },
+                      { k: 'explicoProducto', l: '2. Se explicó la temática de Blue Sharks y La Tóxica' },
+                      { k: 'informoPrecio', l: '3. Se informó el precio y promociones' },
+                      { k: 'atendioDudas', l: '4. Se atendieron dudas con amabilidad' },
+                      { k: 'ofrecioAlternativas', l: '5. Se ofrecieron combos (Dúo Letal / Doble Peligro)' },
+                      { k: 'realizoCobro', l: '6. Se cobró de forma ágil y se entregó cambio' },
+                      { k: 'entregoProducto', l: '7. Se entregó la bebida con presentación impecable' },
+                      { k: 'agradecioCompra', l: '8. Se agradeció la compra cordialmente' },
+                    ].map(({ k, l }) => (
+                      <tr key={k}>
+                        <td className="p-2 border font-medium">{l}</td>
+                        <td className="p-2 border text-center"><input type="radio" checked={serviceRating[k] === 'SI'} onChange={() => setServiceRating({...serviceRating, [k]: 'SI'})} /></td>
+                        <td className="p-2 border text-center"><input type="radio" checked={serviceRating[k] === 'NO'} onChange={() => setServiceRating({...serviceRating, [k]: 'NO'})} /></td>
+                        <td className="p-2 border text-center"><input type="radio" checked={serviceRating[k] === 'DEBE_MEJORARSE'} onChange={() => setServiceRating({...serviceRating, [k]: 'DEBE_MEJORARSE'})} /></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            {/* 6. CHECKLIST INSAB */}
+            {activeTab === 'evidence' && (
+              <div className="bg-white p-6 rounded-3xl border border-slate-200 space-y-4 text-xs">
+                <h2 className="text-base font-bold">Lista de Chequeo de Entregables Oficiales INSAB</h2>
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
+                  {Object.entries(checklist).map(([item, checked]) => (
+                    <label key={item} onClick={() => setChecklist(prev => ({ ...prev, [item]: !prev[item] }))} className={`flex items-center gap-2 p-3 rounded-xl border cursor-pointer ${checked ? 'bg-emerald-50 border-emerald-300 font-bold text-emerald-900' : 'bg-slate-50 text-slate-400'}`}>
+                      <input type="checkbox" checked={checked} onChange={() => {}} className="h-4 w-4 text-emerald-600 rounded" />
+                      <span>{item}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* 7. INFORME INSAB OFICIAL */}
+            {activeTab === 'report' && (
+              <div className="space-y-6">
+                <div className="bg-white p-4 rounded-3xl border flex flex-wrap items-center justify-between gap-3 print-hidden">
+                  <div>
+                    <h2 className="font-black text-sm">Informe Final de Evaluación INSAB (Módulo 3.7)</h2>
+                    <p className="text-xs text-slate-500">Documento completo con las 18 secciones oficiales y firmas de los 7 socios.</p>
+                  </div>
+                  <div className="flex gap-2">
+                    <button onClick={handleDownloadWordDoc} className="px-3.5 py-2 bg-blue-50 border border-blue-200 text-blue-900 rounded-xl text-xs font-bold">
+                      📄 Descargar Word (.doc)
+                    </button>
+                    <button onClick={() => window.print()} className="px-4 py-2 bg-cyan-600 hover:bg-cyan-700 text-white rounded-xl text-xs font-bold shadow-sm">
+                      🖨️ Imprimir / Guardar PDF
+                    </button>
+                  </div>
+                </div>
+
+                {/* Hoja Formal del Informe */}
+                <div className="bg-white p-8 md:p-12 rounded-3xl border shadow-sm space-y-6 text-xs print:p-0 print:border-none">
+                  {/* Encabezado con Logo */}
+                  <div className="text-center space-y-1 border-b-2 border-slate-300 pb-4 print-avoid-break">
+                    <img src="logo.jpg" alt="Logo INSAB" className="h-20 w-20 object-contain mx-auto rounded-full border border-slate-200 mb-2" onError={e => e.target.style.display='none'} />
+                    <h1 className="text-base font-bold uppercase">{metadata.schoolName}</h1>
+                    <h2 className="text-xs font-semibold text-slate-700 uppercase">{metadata.moduleName}</h2>
+                    <h3 className="text-xs font-bold text-cyan-800 uppercase tracking-widest">{metadata.eventName}</h3>
+                    <p className="text-sm font-black pt-1">INFORME FINAL DE EVALUACIÓN Y CIERRE DEL PROYECTO</p>
+                    <p className="italic text-slate-500 text-[11px]">"DE LA IDEA A LA PUESTA EN MARCHA Y EVALUACIÓN DE LOS RESULTADOS"</p>
+                  </div>
+
+                  {/* Portada */}
+                  <div className="bg-slate-50 p-4 rounded-xl border space-y-2 print-avoid-break">
+                    <strong className="block text-slate-900 border-b pb-1 uppercase font-bold">I. DATOS GENERALES DEL PROYECTO (PORTADA)</strong>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div><strong>Negocio:</strong> {metadata.businessName}</div>
+                      <div><strong>Slogan:</strong> "{metadata.slogan}"</div>
+                      <div><strong>Productos:</strong> {metadata.productName}</div>
+                      <div><strong>Docente:</strong> {metadata.teacherName}</div>
+                      <div><strong>Fecha de Feria:</strong> {metadata.fairDate}</div>
+                      <div><strong>Capital Total:</strong> $140.00 (7 socios x $20.00)</div>
+                    </div>
+                  </div>
+
+                  {/* Producción */}
+                  <div className="space-y-2 print-avoid-break">
+                    <strong className="block text-slate-900 uppercase font-bold">III. RESULTADOS DE PRODUCCIÓN</strong>
+                    <table className="w-full border text-xs">
+                      <thead className="bg-slate-100 font-bold">
+                        <tr><th className="p-2 border">CONCEPTO</th><th className="p-2 border text-center">Blue Sharks</th><th className="p-2 border text-center">La Tóxica</th><th className="p-2 border text-center">TOTAL</th></tr>
+                      </thead>
+                      <tbody>
+                        <tr><td className="p-1.5 border">Planificados</td><td className="p-1.5 border text-center font-mono">50</td><td className="p-1.5 border text-center font-mono">50</td><td className="p-1.5 border text-center font-mono font-bold">100</td></tr>
+                        <tr className="bg-emerald-50"><td className="p-1.5 border font-bold">Elaborados (en ventas)</td><td className="p-1.5 border text-center font-mono font-bold">{equivBlue}</td><td className="p-1.5 border text-center font-mono font-bold">{equivToxica}</td><td className="p-1.5 border text-center font-mono font-bold">{equivBlue + equivToxica}</td></tr>
+                        <tr><td className="p-1.5 border font-bold">Vendidos (Total equivalente)</td><td className="p-1.5 border text-center font-mono">{equivBlue}</td><td className="p-1.5 border text-center font-mono">{equivToxica}</td><td className="p-1.5 border text-center font-mono font-bold">{equivBlue + equivToxica}</td></tr>
+                        <tr><td className="p-1.5 border text-rose-700">Dañados / Mermas</td><td className="p-1.5 border text-center font-mono text-rose-700">0</td><td className="p-1.5 border text-center font-mono text-rose-700">0</td><td className="p-1.5 border text-center font-mono font-bold text-rose-700">0</td></tr>
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* Ventas */}
+                  <div className="space-y-2 print-avoid-break">
+                    <strong className="block text-slate-900 uppercase font-bold">IV. RESULTADOS DE VENTAS</strong>
+                    <table className="w-full border text-xs">
+                      <thead className="bg-slate-100 font-bold">
+                        <tr><th className="p-2 border">PRODUCTO</th><th className="p-2 border text-center">PRECIO</th><th className="p-2 border text-center">CANTIDAD</th><th className="p-2 border text-right">TOTAL</th></tr>
+                      </thead>
+                      <tbody>
+                        <tr><td className="p-1.5 border">Blue Sharks</td><td className="p-1.5 border text-center font-mono">$2.50</td><td className="p-1.5 border text-center font-mono">{blueSharksSold}</td><td className="p-1.5 border text-right font-mono">${(blueSharksSold * 2.50).toFixed(2)}</td></tr>
+                        <tr><td className="p-1.5 border">La Tóxica</td><td className="p-1.5 border text-center font-mono">$2.00</td><td className="p-1.5 border text-center font-mono">{laToxicaSold}</td><td className="p-1.5 border text-right font-mono">${(laToxicaSold * 2.00).toFixed(2)}</td></tr>
+                        <tr><td className="p-1.5 border">Dúo Letal (Combo)</td><td className="p-1.5 border text-center font-mono">$4.00</td><td className="p-1.5 border text-center font-mono">{duoLetalSold}</td><td className="p-1.5 border text-right font-mono">${(duoLetalSold * 4.00).toFixed(2)}</td></tr>
+                        <tr><td className="p-1.5 border">Doble Peligro (Mega Combo)</td><td className="p-1.5 border text-center font-mono">$7.50</td><td className="p-1.5 border text-center font-mono">{doblePeligroSold}</td><td className="p-1.5 border text-right font-mono">${(doblePeligroSold * 7.50).toFixed(2)}</td></tr>
+                        <tr className="bg-slate-100 font-bold"><td colSpan="2" className="p-2 border">TOTALES:</td><td className="p-2 border text-center font-mono">{totalUnits}</td><td className="p-2 border text-right font-mono text-cyan-800">${totalSales.toFixed(2)}</td></tr>
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* Resultado Económico */}
+                  <div className="space-y-2 print-avoid-break">
+                    <strong className="block text-slate-900 uppercase font-bold">VI & VII. RESULTADO ECONÓMICO Y RECUPERACIÓN DE CAPITAL</strong>
+                    <div className="p-3 bg-emerald-50 border border-emerald-300 rounded-xl text-center space-y-1 font-semibold">
+                      <div className="text-xs uppercase font-bold text-emerald-900">GANANCIA = VENTAS – COSTOS</div>
+                      <div className="text-sm font-black font-mono">${totalSales.toFixed(2)} – ${totalCosts.toFixed(2)} = ${netProfit.toFixed(2)}</div>
+                      <div className="text-[11px] text-emerald-800 font-bold">Estado del Capital: {isRecovered ? "☑ Recuperado al 100%" : "Parcialmente recuperado"}</div>
+                    </div>
+                  </div>
+
+                  {/* 7 Socios */}
+                  <div className="space-y-2 print-avoid-break">
+                    <strong className="block text-slate-900 uppercase font-bold">VIII & XVII. DISTRIBUCIÓN Y FIRMAS DE LOS 7 SOCIOS COOPERATIVISTAS</strong>
+                    <table className="w-full border text-xs">
+                      <thead className="bg-slate-100 font-bold">
+                        <tr><th className="p-1.5 border text-center">N.º</th><th className="p-1.5 border">NOMBRE</th><th className="p-1.5 border">ROL</th><th className="p-1.5 border text-right">APORTE</th><th className="p-1.5 border text-right">GANANCIA</th><th className="p-1.5 border text-right">TOTAL</th><th className="p-1.5 border text-center">FIRMA</th></tr>
+                      </thead>
+                      <tbody>
+                        {partners.map((p, idx) => (
+                          <tr key={p.id}>
+                            <td className="p-1.5 border text-center font-mono">{idx + 1}</td>
+                            <td className="p-1.5 border font-bold">{p.name}</td>
+                            <td className="p-1.5 border text-slate-600">{p.role}</td>
+                            <td className="p-1.5 border text-right font-mono">$20.00</td>
+                            <td className="p-1.5 border text-right font-mono text-emerald-700">${profitPerPartner.toFixed(2)}</td>
+                            <td className="p-1.5 border text-right font-mono font-bold">${payoutPerPartner.toFixed(2)}</td>
+                            <td className="p-1.5 border text-center text-slate-400 font-serif italic">________________</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* Cierre XVIII */}
+                  <div className="p-4 bg-slate-900 text-white rounded-2xl text-xs space-y-1 print-avoid-break">
+                    <div className="font-bold text-center border-b border-slate-700 pb-1 uppercase">XVIII. RESULTADO FINAL DEL NEGOCIO</div>
+                    <div className="grid grid-cols-2 gap-2 pt-1 font-mono">
+                      <div>CAPITAL INVERTIDO: $140.00</div>
+                      <div className="text-right text-cyan-400">TOTAL VENDIDO: ${totalSales.toFixed(2)}</div>
+                      <div>COSTOS TOTALES: ${totalCosts.toFixed(2)}</div>
+                      <div className="text-right text-emerald-400">GANANCIA NETA: ${netProfit.toFixed(2)}</div>
+                    </div>
+                    <div className="text-center pt-2 font-bold text-emerald-400 border-t border-slate-700 mt-2">
+                      TOTAL RECIBIDO POR CADA UNO DE LOS 7 SOCIOS: ${payoutPerPartner.toFixed(2)}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+          </main>
+
+          {/* MODAL DE TICKET TÉRMICO */}
+          {selectedOrder && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 print:p-0">
+              <div className="bg-white rounded-3xl max-w-sm w-full p-6 text-xs font-mono space-y-3">
+                <div className="flex justify-between items-center border-b pb-2">
+                  <span className="font-bold">Ticket ORD-{String(selectedOrder.orderNumber).padStart(4, '0')}</span>
+                  <button onClick={() => setSelectedOrder(null)} className="text-slate-400 hover:text-black">✕</button>
+                </div>
+                <div className="text-center space-y-1">
+                  <h3 className="font-black text-sm uppercase">BOOM DRINKS</h3>
+                  <p className="text-[10px] text-slate-500">INSAB • Módulo 3.7</p>
+                </div>
+                <div className="border-t border-b border-dashed py-2 space-y-1">
+                  <div>Cliente: {selectedOrder.customerName}</div>
+                  <div>Fecha: {selectedOrder.timestamp}</div>
+                </div>
+                <div className="space-y-1">
+                  {selectedOrder.items.map((i, idx) => (
+                    <div key={idx} className="flex justify-between">
+                      <span>{i.quantity}x {i.name}</span>
+                      <span>${(i.price * i.quantity).toFixed(2)}</span>
+                    </div>
+                  ))}
+                  <div className="flex justify-between font-bold border-t pt-1 text-sm">
+                    <span>TOTAL:</span>
+                    <span>${selectedOrder.total.toFixed(2)}</span>
+                  </div>
+                  <div className="flex justify-between text-slate-500">
+                    <span>Efectivo:</span>
+                    <span>${selectedOrder.cashReceived.toFixed(2)}</span>
+                  </div>
+                  <div className="flex justify-between font-bold text-emerald-700">
+                    <span>Cambio:</span>
+                    <span>${selectedOrder.cashChange.toFixed(2)}</span>
+                  </div>
+                </div>
+                <div className="flex gap-2 pt-2 border-t">
+                  <button onClick={() => window.print()} className="flex-1 py-2 bg-cyan-600 text-white rounded-xl font-bold">Imprimir</button>
+                  <button onClick={() => setSelectedOrder(null)} className="px-4 py-2 border rounded-xl">Cerrar</button>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    ReactDOM.render(<App />, document.getElementById('root'));
+  </script>
+</body>
+</html>
